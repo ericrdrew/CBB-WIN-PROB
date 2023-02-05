@@ -1,0 +1,156 @@
+---
+title: "CBB-Win-Prob"
+author: "Eric Drew"
+date: "2023-02-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(hoopR)
+library(randomForest)
+library(xgboost)
+library(Ckmeans.1d.dp)
+library(pdp)
+library(AmesHousing)
+library(plotROC)
+library(varhandle)
+library(tidyverse)
+library(MASS)
+library(visreg)
+library(brglm)
+library(car)
+library(mgcv)
+library(multcomp)
+library(rJava)
+library(glmulti)
+library(givitiR)
+library(DescTools)
+library(ROCR)
+library(InformationValue)
+library(brant)
+library(nnet)
+library(naniar)
+library(caret)
+library(plotROC)
+library(wehoop)
+```
+
+```{r data}
+progressr::with_progress({
+  wbb_pbp <- wehoop::load_wbb_pbp() %>%
+    mutate(score_diff = home_score - away_score)
+})
+```
+
+```{r}
+winners <- wbb_pbp %>% 
+  group_by(game_id) %>% 
+    filter(game_play_number == max(game_play_number)) %>% 
+  ungroup() %>% 
+  mutate(winner = case_when(score_diff > 0 ~ 1,
+                            score_diff < 0 ~ 0),
+         final_margin = home_score - away_score) %>% 
+  filter(game_play_number != 1) %>%
+  dplyr::select(c(game_id,winner,final_margin))
+
+#join metrics onto OG data
+final_pbp <- left_join(wbb_pbp, winners, on='game_id')
+
+#Convert booleans to binary integer
+final_pbp$scoring_play <- as.integer(as.logical(final_pbp$scoring_play))
+final_pbp$shooting_play <- as.integer(as.logical(final_pbp$shooting_play))
+
+#cut down on obs
+final_pbp <- final_pbp %>% filter(!is.na(winner))
+final_pbp <- final_pbp[1:500000, ]
+
+#select relevant variables and filter out games that did not have winners
+train <- final_pbp %>% dplyr::select(c(winner,type_id, away_score, home_score, period_number,
+                                           scoring_play,score_value, shooting_play, home_team_spread,
+                                           game_spread,end_game_seconds_remaining, score_diff))
+
+```
+
+```{r}
+#create matrix objects for RF
+train <- as.data.frame(train)
+train$winner <- as.factor(train$winner)
+
+set.seed(12345)
+
+
+#fit model 
+rf <- randomForest(winner ~ ., train, ntree=300, na.action=na.exclude)
+
+
+#predictions on test set
+train$p_hat <- predict(rf, type="prob")[,2]
+hist(train$p_hat)
+
+#var imp
+varImpPlot(rf,
+           sort = TRUE,
+           n.var = 10,
+           main = "Top 10 - Variable Importance")
+importance(rf)
+
+final_pbp <- cbind(final_pbp, train$p_hat)
+final_pbp <- final_pbp %>% 
+  rename(
+    win_prob = V2
+    )
+```
+
+
+```{r}
+#Find games with large collapse(home team up then  lost)
+collapse <- subset(final_pbp, win_prob >.85 & winner == '0' & game_play_number>100) %>%
+              dplyr::select(c(home_team_name, away_team_name,score_diff, win_prob, game_play_number,
+                              end_game_seconds_remaining,game_id)) %>%
+              filter(away_team_name %in% c('Virginia Tech','Virginia','Wake Forest','Vanderbilt',
+                                    'UConn','Texas Tech','South Carolina','Ohio State','Ole Miss',
+                                    'Michigan','Louisville','Georgia Tech','Iowa','Florida',
+                                    'Arizona State'))
+
+
+#specific game example
+example <- final_pbp %>% 
+  filter(game_id == 401487910) %>% 
+  mutate(chance_win =  case_when(win_prob > .50 ~ "Grand Canyon",
+                                        win_prob < .50 ~ "Arizona State", 
+                                        TRUE ~ "Tie"))
+```
+
+```{r plots}
+### Plotting!
+ggplot(example, aes(x = game_play_number,
+                     y = 1-win_prob,
+                     color = chance_win,
+                     group = 1)) +
+  geom_line(size=.8) + 
+  geom_hline(yintercept=0.5,linetype=2) +
+  scale_y_continuous(limits = c(0,1),
+                     labels = scales::percent) +
+  scale_color_manual(values = c("Grand Canyon" = "purple",
+                                "Arizona State" = "darkred",
+                                "Tie" = "darkgrey")) +
+  labs(x = "Game Play Number",
+       y = "Predicted Win Probability",
+       title = "Predicted Win Probability for Arizona State",
+       subtitle = "Arizona State @ Grand Canyon WBB 11/30/2022",
+       caption = "Created By Eric Drew ~ Data from ESPN via wehoop package",
+       color = "Favored to Win") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5)) +
+  theme(panel.grid.major = element_line(color = "gray",
+                                        size = 0.5,
+                                        linetype = 2))
+
+
+ggsave("ASU-GrandCanyon-Win-Prob.png", plot=last_plot(),width=6, height=4)
+
+```
