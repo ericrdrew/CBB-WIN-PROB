@@ -36,6 +36,7 @@ library(naniar)
 library(caret)
 library(plotROC)
 library(wehoop)
+library(Thermimage)
 ```
 
 ```{r data}
@@ -100,20 +101,17 @@ importance(rf)
 final_pbp <- cbind(final_pbp, train$p_hat)
 final_pbp <- final_pbp %>% 
   rename(
-    win_prob = V2
+    win_prob2 = V2
     )
+
 ```
 
 
 ```{r}
 #Find games with large collapse(home team up then  lost)
-collapse <- subset(final_pbp, win_prob >.85 & winner == '0' & game_play_number>100) %>%
+collapse <- subset(final_pbp,(win_prob >.90 & winner == '0')|(win_prob<.1 & winner=='1')) %>%
               dplyr::select(c(home_team_name, away_team_name,score_diff, win_prob, game_play_number,
-                              end_game_seconds_remaining,game_id)) %>%
-              filter(away_team_name %in% c('Virginia Tech','Virginia','Wake Forest','Vanderbilt',
-                                    'UConn','Texas Tech','South Carolina','Ohio State','Ole Miss',
-                                    'Michigan','Louisville','Georgia Tech','Iowa','Florida',
-                                    'Arizona State'))
+                              end_game_seconds_remaining,game_id))
 
 
 #specific game example
@@ -122,15 +120,17 @@ example <- final_pbp %>%
   mutate(chance_win =  case_when(win_prob > .50 ~ "Grand Canyon",
                                         win_prob < .50 ~ "Arizona State", 
                                         TRUE ~ "Tie"))
+
+example.new = example[seq(1, nrow(example), 2), ]
 ```
 
 ```{r plots}
 ### Plotting!
-ggplot(example, aes(x = game_play_number,
+ggplot(example.new, aes(x = game_play_number,
                      y = 1-win_prob,
                      color = chance_win,
                      group = 1)) +
-  geom_line(size=.8) + 
+  geom_line(size=.9) + 
   geom_hline(yintercept=0.5,linetype=2) +
   scale_y_continuous(limits = c(0,1),
                      labels = scales::percent) +
